@@ -1,0 +1,4 @@
+{
+    "version": 2,
+    "builds": [{"Whatsapp": "./index.js", "use": "@vercel/node"}]
+}
