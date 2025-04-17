@@ -1,0 +1,198 @@
+import express from 'express';
+import mysql from 'mysql2/promise';
+
+const app = express();
+const port = 3000;
+
+// MySQL connection setup using promises (for async/await)
+const pool = mysql.createPool({
+  host: 'localhost', // replace with your DB host
+  user: 'root', // replace with your DB user
+  password: '', // replace with your DB password
+  database: 'your_database_name' // replace with your DB name
+});
+
+// Middleware to parse JSON
+app.use(express.json());
+
+// Function to create tables
+const createTables = async () => {
+  try {
+    const connection = await pool.getConnection();
+    
+    const restaurantTable = `
+      CREATE TABLE IF NOT EXISTS restaurants (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        shop_id INT NOT NULL UNIQUE,
+        name VARCHAR(255) NOT NULL
+      );
+    `;
+
+    const customerTable = `
+      CREATE TABLE IF NOT EXISTS customers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        mobile_number VARCHAR(15) NOT NULL
+      );
+    `;
+
+    const templateTable = `
+      CREATE TABLE IF NOT EXISTS templates (
+        id INT  PRIMARY KEY,
+        template_name VARCHAR(255) NOT NULL,
+        description TEXT NOT NULL
+      );
+    `;
+
+    const userVisitTable = `
+      CREATE TABLE IF NOT EXISTS user_visits (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        customer_id INT NOT NULL,
+        shop_id INT NOT NULL,
+        visited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers(id),
+        FOREIGN KEY (shop_id) REFERENCES restaurants(shop_id)
+      );
+    `;
+
+    const restaurantTemplateTable = `
+      CREATE TABLE IF NOT EXISTS restaurant_templates (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        shop_id INT NOT NULL,
+        template_id INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shop_id) REFERENCES restaurants(shop_id),
+        FOREIGN KEY (template_id) REFERENCES templates(id)
+      );
+    `;
+    
+    // Create all tables
+    await connection.query(restaurantTable);
+    await connection.query(customerTable);
+    await connection.query(templateTable);
+    await connection.query(userVisitTable);
+    await connection.query(restaurantTemplateTable);
+    
+    console.log('Tables created successfully.');
+    connection.release();
+  } catch (error) {
+    console.error('Error creating tables:', error);
+  }
+};
+
+// Function to send a template to customers who visited a particular shop
+const sendTemplateToVisitors = async (shopId, templateId) => {
+  try {
+    const connection = await pool.getConnection();
+
+    // Get customers who visited the given shopId
+    const [rows] = await connection.query(
+      'SELECT DISTINCT customer_id FROM user_visits WHERE shop_id = ?',
+      [shopId]
+    );
+
+    if (rows.length === 0) {
+      console.log('No customers found who visited this shop.');
+      connection.release();
+      return;
+    }
+
+    // Loop over the customers and create entries in restaurant_templates
+    for (const row of rows) {
+      const customerId = row.customer_id;
+
+      await connection.query(
+        'INSERT INTO restaurant_templates (shop_id, template_id) VALUES (?, ?)',
+        [shopId, templateId]
+      );
+      console.log(`Template with ID ${templateId} sent to customer with ID ${customerId}`);
+    }
+
+    connection.release();
+    console.log('Template sent to all visitors of the shop.');
+  } catch (error) {
+    console.error('Error sending template:', error);
+  }
+};
+
+// API to create a new restaurant
+app.post('/restaurants', async (req, res) => {
+  const { shop_id, name } = req.body;
+
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO restaurants (shop_id, name) VALUES (?, ?)',
+      [shop_id, name]
+    );
+    res.status(201).json({ message: 'Restaurant created', restaurantId: result.insertId });
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating restaurant' });
+  }
+});
+
+// API to create a new customer
+app.post('/customers', async (req, res) => {
+  const { name, mobile_number } = req.body;
+
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO customers (name, mobile_number) VALUES (?, ?)',
+      [name, mobile_number]
+    );
+    res.status(201).json({ message: 'Customer created', customerId: result.insertId });
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating customer' });
+  }
+});
+
+// API to create a new template
+app.post('/templates', async (req, res) => {
+  const { template_name, description } = req.body;
+
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO templates (template_name, description) VALUES (?, ?)',
+      [template_name, description]
+    );
+    res.status(201).json({ message: 'Template created', templateId: result.insertId });
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating template' });
+  }
+});
+
+// API to record a user visit
+app.post('/user-visits', async (req, res) => {
+  const { customer_id, shop_id } = req.body;
+
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO user_visits (customer_id, shop_id) VALUES (?, ?)',
+      [customer_id, shop_id]
+    );
+    res.status(201).json({ message: 'User visit recorded' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error recording user visit' });
+  }
+});
+
+// API to send a template to all users who visited a specific shop
+app.post('/send-template', async (req, res) => {
+  const { shop_id, template_id } = req.body;
+
+  if (!shop_id || !template_id) {
+    return res.status(400).json({ error: 'Shop ID and Template ID are required.' });
+  }
+
+  try {
+    await sendTemplateToVisitors(shop_id, template_id);
+    res.status(200).json({ message: 'Template sent to all visitors of the shop.' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error sending template' });
+  }
+});
+
+// Start server and create tables
+app.listen(port, async () => {
+  console.log(`Server is running on port ${port}`);
+  await createTables(); // Ensure tables are created on startup
+});
